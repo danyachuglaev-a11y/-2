@@ -2,54 +2,33 @@
 # -*- coding: utf-8 -*-
 
 """
-🤖 ZOV BOT — Полнофункциональный Telegram бот
-Версия: 3.0.0
-Планета: ZOV
-Статус: БОЕВОЙ
+🤖 ZOV BOT v3.0 — ПОЛНОСТЬЮ РАБОЧАЯ ВЕРСИЯ
 """
-
-# ============================================================
-# 📦 ИМПОРТЫ
-# ============================================================
 
 import asyncio
 import logging
 import re
 import time
-import json
 import sqlite3
 import os
-import tempfile
-import html
-from datetime import datetime, timedelta
+from datetime import datetime
 from collections import defaultdict
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 
-# Aiogram
-from aiogram import Bot, Dispatcher, Router, F
+from aiogram import Bot, Dispatcher, Router, F, types
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
-    ChatMember, ChatMemberAdministrator, ChatMemberOwner,
-    InputMediaPhoto, InputMediaVideo, InputMediaDocument,
-    FSInputFile, URLInputFile, ReplyKeyboardMarkup, KeyboardButton,
-    ReplyKeyboardRemove, ForceReply
+    ChatMemberAdministrator, ChatMemberOwner, Update
 )
-from aiogram.filters import Command, StateFilter
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.client.default import DefaultBotProperties
-from aiogram.exceptions import (
-    TelegramBadRequest, TelegramForbiddenError,
-    TelegramNetworkError, TelegramRetryAfter
-)
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
-# Groq
 from groq import Groq
-
-# HTTP
-import aiohttp
 
 # ============================================================
 # ⚙️ КОНФИГУРАЦИЯ — ЗАМЕНИТЬ НА СВОИ ДАННЫЕ
@@ -59,22 +38,16 @@ BOT_TOKEN = "8887137957:AAHsh1OjO30sRdzVe7ljhsWc5ud8DXIFbeE"
 GROQ_API_KEY = "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"
 MODEL = "llama-3.3-70b-versatile"
 MAX_HISTORY = 15
-
-# Администраторы (ваш Telegram ID)
-ADMIN_IDS = [1022249544]  # ЗАМЕНИТЬ НА СВОЙ ID
+ADMIN_IDS = [8887137957]  # ЗАМЕНИТЬ НА СВОЙ ID
 
 # ============================================================
-# 📁 НАСТРОЙКИ ПУТЕЙ
+# 📁 НАСТРОЙКИ
 # ============================================================
 
 BASE_DIR = Path(__file__).parent
 DB_PATH = BASE_DIR / "zov_bot_data.db"
 LOGS_DIR = BASE_DIR / "logs"
-TEMP_DIR = BASE_DIR / "temp"
-
-# Создаем директории
 LOGS_DIR.mkdir(exist_ok=True)
-TEMP_DIR.mkdir(exist_ok=True)
 
 # ============================================================
 # 📊 ЛОГИРОВАНИЕ
@@ -95,15 +68,10 @@ logger = logging.getLogger(__name__)
 # ============================================================
 
 class Form(StatesGroup):
-    waiting_for_broadcast = State()
-    waiting_for_system_prompt = State()
     waiting_for_post_text = State()
-    waiting_for_channel_selection = State()
-    waiting_for_template_name = State()
-    waiting_for_template_content = State()
 
 # ============================================================
-# 🤖 ИНИЦИАЛИЗАЦИЯ БОТА И ДИСПЕТЧЕРА
+# 🤖 ИНИЦИАЛИЗАЦИЯ
 # ============================================================
 
 bot = Bot(
@@ -114,19 +82,26 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 router = Router()
 
-# Groq клиент
-groq_client = Groq(api_key=GROQ_API_KEY)
+# ФИКС: правильная инициализация Groq
+try:
+    groq_client = Groq(api_key=GROQ_API_KEY)
+except TypeError:
+    # Обходной путь для старых версий
+    class PatchedGroq(Groq):
+        def __init__(self, **kwargs):
+            kwargs.pop('proxies', None)
+            kwargs.pop('proxy', None)
+            super().__init__(**kwargs)
+    groq_client = PatchedGroq(api_key=GROQ_API_KEY)
 
 # ============================================================
-# 💾 БАЗА ДАННЫХ SQLITE (ПОЛНАЯ)
+# 💾 БАЗА ДАННЫХ
 # ============================================================
 
 def init_db():
-    """Инициализация всех таблиц базы данных"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Пользователи
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
@@ -141,40 +116,16 @@ def init_db():
         )
     ''')
     
-    # История диалогов (храним в JSON)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS chat_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             role TEXT,
             content TEXT,
-            timestamp TEXT,
-            FOREIGN KEY(user_id) REFERENCES users(user_id)
+            timestamp TEXT
         )
     ''')
     
-    # Обратная связь
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS feedback (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            rating INTEGER,
-            comment TEXT,
-            date TEXT,
-            FOREIGN KEY(user_id) REFERENCES users(user_id)
-        )
-    ''')
-    
-    # Персональные промпты
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS custom_prompts (
-            user_id INTEGER PRIMARY KEY,
-            prompt TEXT,
-            updated_at TEXT,
-            FOREIGN KEY(user_id) REFERENCES users(user_id)
-        )
-    ''')
-    
-    # Каналы
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS channels (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,12 +134,10 @@ def init_db():
             chat_username TEXT,
             added_by INTEGER,
             added_date TEXT,
-            is_active BOOLEAN DEFAULT TRUE,
-            FOREIGN KEY(added_by) REFERENCES users(user_id)
+            is_active BOOLEAN DEFAULT TRUE
         )
     ''')
     
-    # Посты (история)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS posts (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -199,31 +148,35 @@ def init_db():
             media_type TEXT,
             media_file_id TEXT,
             posted_date TEXT,
-            views INTEGER DEFAULT 0,
-            FOREIGN KEY(channel_id) REFERENCES channels(chat_id),
-            FOREIGN KEY(author_id) REFERENCES users(user_id)
+            views INTEGER DEFAULT 0
         )
     ''')
     
-    # Шаблоны постов
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS post_templates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             name TEXT,
             content TEXT,
-            created_date TEXT,
-            FOREIGN KEY(user_id) REFERENCES users(user_id)
+            created_date TEXT
         )
     ''')
     
-    # Черный список слов (для модерации)
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS banned_words (
+        CREATE TABLE IF NOT EXISTS custom_prompts (
+            user_id INTEGER PRIMARY KEY,
+            prompt TEXT,
+            updated_at TEXT
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS feedback (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            word TEXT UNIQUE,
-            added_by INTEGER,
-            added_date TEXT
+            user_id INTEGER,
+            rating INTEGER,
+            comment TEXT,
+            date TEXT
         )
     ''')
     
@@ -231,15 +184,13 @@ def init_db():
     conn.close()
     logger.info("База данных инициализирована")
 
-# Инициализация БД при старте
 init_db()
 
 # ============================================================
-# 📋 ФУНКЦИИ РАБОТЫ С БАЗОЙ ДАННЫХ
+# 📋 ФУНКЦИИ БАЗЫ ДАННЫХ
 # ============================================================
 
 def get_user_data(user_id: int) -> Optional[Dict]:
-    """Получить данные пользователя"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM users WHERE user_id = ?', (user_id,))
@@ -253,10 +204,8 @@ def get_user_data(user_id: int) -> Optional[Dict]:
     return None
 
 def register_user(user_id: int, username: str = None, first_name: str = None, last_name: str = None):
-    """Регистрация или обновление пользователя"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    
     existing = get_user_data(user_id)
     if not existing:
         cursor.execute('''
@@ -269,68 +218,37 @@ def register_user(user_id: int, username: str = None, first_name: str = None, la
             UPDATE users SET last_activity = ?, username = ?, first_name = ?, last_name = ?
             WHERE user_id = ?
         ''', (datetime.now().isoformat(), username, first_name, last_name, user_id))
-    
     conn.commit()
     conn.close()
 
 def update_trust_score(user_id: int, delta: int):
-    """Обновить рейтинг доверия"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute('''
-        UPDATE users SET trust_score = trust_score + ? WHERE user_id = ?
-    ''', (delta, user_id))
+    cursor.execute('UPDATE users SET trust_score = trust_score + ? WHERE user_id = ?', (delta, user_id))
     conn.commit()
     conn.close()
 
 def increment_requests(user_id: int):
-    """Увеличить счетчик запросов"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute('''
-        UPDATE users SET total_requests = total_requests + 1 WHERE user_id = ?
-    ''', (user_id,))
+    cursor.execute('UPDATE users SET total_requests = total_requests + 1 WHERE user_id = ?', (user_id,))
     conn.commit()
     conn.close()
 
 def set_user_banned(user_id: int, banned: bool):
-    """Забанить/разбанить пользователя"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('UPDATE users SET banned = ? WHERE user_id = ?', (banned, user_id))
     conn.commit()
     conn.close()
 
-def get_custom_prompt(user_id: int) -> Optional[str]:
-    """Получить персональный промпт"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('SELECT prompt FROM custom_prompts WHERE user_id = ?', (user_id,))
-    data = cursor.fetchone()
-    conn.close()
-    return data[0] if data else None
-
-def set_custom_prompt(user_id: int, prompt: str):
-    """Сохранить персональный промпт"""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT OR REPLACE INTO custom_prompts (user_id, prompt, updated_at)
-        VALUES (?, ?, ?)
-    ''', (user_id, prompt, datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
-
 def save_history_message(user_id: int, role: str, content: str):
-    """Сохранить сообщение в историю"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
         INSERT INTO chat_history (user_id, role, content, timestamp)
         VALUES (?, ?, ?, ?)
     ''', (user_id, role, content, datetime.now().isoformat()))
-    
-    # Ограничиваем историю (храним последние 30 сообщений)
     cursor.execute('''
         DELETE FROM chat_history WHERE user_id = ? 
         AND timestamp < (
@@ -340,12 +258,10 @@ def save_history_message(user_id: int, role: str, content: str):
             LIMIT 1 OFFSET 30
         )
     ''', (user_id, user_id))
-    
     conn.commit()
     conn.close()
 
 def get_chat_history(user_id: int, limit: int = 15) -> List[Dict]:
-    """Получить историю чата"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -359,30 +275,31 @@ def get_chat_history(user_id: int, limit: int = 15) -> List[Dict]:
     return [{'role': row[0], 'content': row[1]} for row in reversed(data)]
 
 def clear_chat_history(user_id: int):
-    """Очистить историю"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('DELETE FROM chat_history WHERE user_id = ?', (user_id,))
     conn.commit()
     conn.close()
 
-# ============================================================
-# 📢 ФУНКЦИИ РАБОТЫ С КАНАЛАМИ
-# ============================================================
+def get_custom_prompt(user_id: int) -> Optional[str]:
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('SELECT prompt FROM custom_prompts WHERE user_id = ?', (user_id,))
+    data = cursor.fetchone()
+    conn.close()
+    return data[0] if data else None
 
-async def add_channel_to_db(chat_id: str, chat_title: str, chat_username: str, added_by: int):
-    """Добавить канал в базу"""
+def set_custom_prompt(user_id: int, prompt: str):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT OR REPLACE INTO channels (chat_id, chat_title, chat_username, added_by, added_date, is_active)
-        VALUES (?, ?, ?, ?, ?, ?)
-    ''', (chat_id, chat_title, chat_username, added_by, datetime.now().isoformat(), True))
+        INSERT OR REPLACE INTO custom_prompts (user_id, prompt, updated_at)
+        VALUES (?, ?, ?)
+    ''', (user_id, prompt, datetime.now().isoformat()))
     conn.commit()
     conn.close()
 
 async def get_user_channels(user_id: int) -> List[Dict]:
-    """Получить каналы пользователя"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -392,7 +309,6 @@ async def get_user_channels(user_id: int) -> List[Dict]:
     ''', (user_id,))
     data = cursor.fetchall()
     conn.close()
-    
     channels = []
     for row in data:
         channels.append({
@@ -403,8 +319,17 @@ async def get_user_channels(user_id: int) -> List[Dict]:
         })
     return channels
 
+async def add_channel_to_db(chat_id: str, chat_title: str, chat_username: str, added_by: int):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT OR REPLACE INTO channels (chat_id, chat_title, chat_username, added_by, added_date, is_active)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (chat_id, chat_title, chat_username, added_by, datetime.now().isoformat(), True))
+    conn.commit()
+    conn.close()
+
 async def remove_channel_from_db(chat_id: str):
-    """Деактивировать канал"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('UPDATE channels SET is_active = FALSE WHERE chat_id = ?', (chat_id,))
@@ -413,7 +338,6 @@ async def remove_channel_from_db(chat_id: str):
 
 async def save_post_to_db(channel_id: str, message_id: int, author_id: int, 
                          content: str, media_type: str = None, media_file_id: str = None):
-    """Сохранить пост в историю"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -424,7 +348,6 @@ async def save_post_to_db(channel_id: str, message_id: int, author_id: int,
     conn.close()
 
 async def get_post_history(channel_id: str, limit: int = 10) -> List[Dict]:
-    """История постов"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -436,7 +359,6 @@ async def get_post_history(channel_id: str, limit: int = 10) -> List[Dict]:
     ''', (channel_id, limit))
     data = cursor.fetchall()
     conn.close()
-    
     posts = []
     for row in data:
         posts.append({
@@ -449,7 +371,6 @@ async def get_post_history(channel_id: str, limit: int = 10) -> List[Dict]:
     return posts
 
 async def save_template(user_id: int, name: str, content: str):
-    """Сохранить шаблон поста"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -460,7 +381,6 @@ async def save_template(user_id: int, name: str, content: str):
     conn.close()
 
 async def get_templates(user_id: int) -> List[Dict]:
-    """Получить шаблоны пользователя"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('''
@@ -471,7 +391,6 @@ async def get_templates(user_id: int) -> List[Dict]:
     ''', (user_id,))
     data = cursor.fetchall()
     conn.close()
-    
     templates = []
     for row in data:
         templates.append({
@@ -482,30 +401,22 @@ async def get_templates(user_id: int) -> List[Dict]:
     return templates
 
 async def get_template_content(user_id: int, name: str) -> Optional[str]:
-    """Получить содержимое шаблона"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute('''
-        SELECT content FROM post_templates
-        WHERE user_id = ? AND name = ?
-    ''', (user_id, name))
+    cursor.execute('SELECT content FROM post_templates WHERE user_id = ? AND name = ?', (user_id, name))
     data = cursor.fetchone()
     conn.close()
     return data[0] if data else None
 
 async def delete_template(user_id: int, name: str):
-    """Удалить шаблон"""
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute('''
-        DELETE FROM post_templates
-        WHERE user_id = ? AND name = ?
-    ''', (user_id, name))
+    cursor.execute('DELETE FROM post_templates WHERE user_id = ? AND name = ?', (user_id, name))
     conn.commit()
     conn.close()
 
 # ============================================================
-# 🛡️ СИСТЕМА АНТИ-ФЛУДА
+# 🛡️ АНТИ-ФЛУД
 # ============================================================
 
 class RateLimiter:
@@ -544,40 +455,31 @@ def get_system_prompt(user_id: int) -> str:
     custom = get_custom_prompt(user_id)
     return custom if custom else SYSTEM_PROMPT_BASE
 
-# ============================================================
-# 🔥 ОБНОВЛЕННАЯ ФУНКЦИЯ ЗАПРОСА К GROQ
-# ============================================================
-
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
+# ============================================================
+# 🔥 ЗАПРОС К GROQ
+# ============================================================
+
 async def ask_groq(user_id: int, user_message: str) -> str:
-    """Отправка запроса к Groq с полной историей"""
-    
-    # Проверка на бан
     user_data = get_user_data(user_id)
     if user_data and user_data.get('banned', False):
         return "⛔ Вы забанены. Обратитесь к администратору."
 
-    # Проверка лимитов
     if not is_admin(user_id) and not rate_limiter.is_allowed(user_id):
         return "⚠️ Слишком много запросов. Подождите минуту."
 
-    # Регистрация пользователя
     register_user(user_id)
     increment_requests(user_id)
     update_trust_score(user_id, 1)
 
-    # Фильтрация мата
     profanity_pattern = re.compile(r'(?i)(хуй|пизд|ебал|бля|сука|нах|залуп|муд|говн|сос|дроч|хер|хрен|заеб)')
     if profanity_pattern.search(user_message):
         user_message = profanity_pattern.sub('****', user_message)
         update_trust_score(user_id, -5)
 
-    # Сохраняем сообщение пользователя
     save_history_message(user_id, "user", user_message)
-    
-    # Получаем историю
     history = get_chat_history(user_id, MAX_HISTORY)
     system_prompt = get_system_prompt(user_id)
     
@@ -593,14 +495,11 @@ async def ask_groq(user_id: int, user_message: str) -> str:
         )
         answer = completion.choices[0].message.content
 
-        # Если ответ слишком короткий
         if len(answer.split()) < 5:
             answer += " Могу подробнее, если нужно."
 
-        # Сохраняем ответ ассистента
         save_history_message(user_id, "assistant", answer)
 
-        # Добавляем подпись
         if "@screamsoon" not in answer.lower():
             answer += "\n\n@ScreamSoon"
 
@@ -612,7 +511,7 @@ async def ask_groq(user_id: int, user_message: str) -> str:
         return "⚠️ Техническая ошибка. Повторите через несколько секунд."
 
 # ============================================================
-# 📤 ФУНКЦИЯ ПУБЛИКАЦИИ В КАНАЛ
+# 📤 ПУБЛИКАЦИЯ В КАНАЛ
 # ============================================================
 
 async def publish_to_channel(
@@ -620,87 +519,31 @@ async def publish_to_channel(
     text: str,
     media_file: str = None,
     media_type: str = None,
-    parse_mode: str = 'HTML',
-    disable_notification: bool = False,
-    reply_markup: InlineKeyboardMarkup = None
+    parse_mode: str = 'HTML'
 ) -> Dict:
-    """
-    Универсальная функция публикации поста в канал
-    """
-    result = {
-        'success': False,
-        'message_id': None,
-        'error': None
-    }
+    result = {'success': False, 'message_id': None, 'error': None}
     
     try:
-        # Проверяем права бота
         bot_member = await bot.get_chat_member(channel_id, bot.id)
         if not isinstance(bot_member, (ChatMemberAdministrator, ChatMemberOwner)):
             result['error'] = 'Бот не администратор в этом канале'
             return result
         
-        # Отправка в зависимости от типа медиа
         if media_file and media_type:
             if media_type == 'photo':
-                if media_file.startswith('http'):
-                    msg = await bot.send_photo(
-                        channel_id, media_file, caption=text, 
-                        parse_mode=parse_mode, disable_notification=disable_notification,
-                        reply_markup=reply_markup
-                    )
-                else:
-                    msg = await bot.send_photo(
-                        channel_id, FSInputFile(media_file), caption=text,
-                        parse_mode=parse_mode, disable_notification=disable_notification,
-                        reply_markup=reply_markup
-                    )
+                msg = await bot.send_photo(channel_id, media_file, caption=text, parse_mode=parse_mode)
             elif media_type == 'video':
-                if media_file.startswith('http'):
-                    msg = await bot.send_video(
-                        channel_id, media_file, caption=text,
-                        parse_mode=parse_mode, disable_notification=disable_notification,
-                        reply_markup=reply_markup
-                    )
-                else:
-                    msg = await bot.send_video(
-                        channel_id, FSInputFile(media_file), caption=text,
-                        parse_mode=parse_mode, disable_notification=disable_notification,
-                        reply_markup=reply_markup
-                    )
+                msg = await bot.send_video(channel_id, media_file, caption=text, parse_mode=parse_mode)
             elif media_type == 'document':
-                if media_file.startswith('http'):
-                    msg = await bot.send_document(
-                        channel_id, media_file, caption=text,
-                        parse_mode=parse_mode, disable_notification=disable_notification,
-                        reply_markup=reply_markup
-                    )
-                else:
-                    msg = await bot.send_document(
-                        channel_id, FSInputFile(media_file), caption=text,
-                        parse_mode=parse_mode, disable_notification=disable_notification,
-                        reply_markup=reply_markup
-                    )
+                msg = await bot.send_document(channel_id, media_file, caption=text, parse_mode=parse_mode)
             else:
-                msg = await bot.send_message(
-                    channel_id, text,
-                    parse_mode=parse_mode, disable_notification=disable_notification,
-                    reply_markup=reply_markup
-                )
+                msg = await bot.send_message(channel_id, text, parse_mode=parse_mode)
         else:
-            # Только текст
-            msg = await bot.send_message(
-                channel_id, text,
-                parse_mode=parse_mode, disable_notification=disable_notification,
-                reply_markup=reply_markup
-            )
+            msg = await bot.send_message(channel_id, text, parse_mode=parse_mode)
         
         result['success'] = True
         result['message_id'] = msg.message_id
-        
-        # Сохраняем в БД
         await save_post_to_db(channel_id, msg.message_id, None, text, media_type, None)
-        
         return result
         
     except TelegramForbiddenError:
@@ -716,7 +559,6 @@ async def publish_to_channel(
 # 🎯 ХЕНДЛЕРЫ КОМАНД
 # ============================================================
 
-# === СТАРТ ===
 @router.message(Command("start"))
 async def start_cmd(msg: Message):
     clear_chat_history(msg.from_user.id)
@@ -728,8 +570,8 @@ async def start_cmd(msg: Message):
     )
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton("📢 Добавить канал", callback_data="add_channel_help")],
-        [InlineKeyboardButton("❓ Помощь", callback_data="help_menu")]
+        [InlineKeyboardButton(text="📢 Добавить канал", callback_data="add_channel_help")],
+        [InlineKeyboardButton(text="❓ Помощь", callback_data="help_menu")]
     ])
     
     await msg.answer(
@@ -745,7 +587,6 @@ async def start_cmd(msg: Message):
         reply_markup=keyboard
     )
 
-# === ПОМОЩЬ ===
 @router.message(Command("help"))
 async def help_cmd(msg: Message):
     text = (
@@ -756,8 +597,7 @@ async def help_cmd(msg: Message):
         "/clear — Очистить историю чата\n"
         "/profile — Ваш профиль\n"
         "/stats — Статистика бота\n"
-        "/rate <1-5> [комментарий] — Оценить ответ\n\n"
-        
+        "/rate <1-5> — Оценить ответ\n\n"
         "📢 <b>Управление каналами:</b>\n"
         "/addchannel @username — Добавить канал\n"
         "/channels — Список каналов\n"
@@ -766,34 +606,29 @@ async def help_cmd(msg: Message):
         "/postvideo <подпись> — Опубликовать с видео\n"
         "/history — История постов\n"
         "/removechannel <ID> — Удалить канал\n\n"
-        
         "📝 <b>Шаблоны постов:</b>\n"
         "/posttemplate <имя> <текст> — Сохранить шаблон\n"
         "/templates — Список шаблонов\n"
         "/usetemplate <имя> — Использовать шаблон\n"
         "/deletetemplate <имя> — Удалить шаблон\n\n"
-        
         "⚙️ <b>Настройки:</b>\n"
         "/setprompt <текст> — Персональный промпт\n"
         "/resetprompt — Сбросить промпт\n"
         "/find <текст> — Поиск в истории\n\n"
-        
         "👨‍💻 Создатель: @screamsoon"
     )
     await msg.answer(text)
 
-# === ОЧИСТКА ИСТОРИИ ===
 @router.message(Command("clear"))
 async def clear_cmd(msg: Message):
     clear_chat_history(msg.from_user.id)
     await msg.answer("✅ История очищена.")
 
-# === ПРОФИЛЬ ===
 @router.message(Command("profile"))
 async def profile_cmd(msg: Message):
     user_data = get_user_data(msg.from_user.id)
     if not user_data:
-        await msg.answer("❌ Вы не зарегистрированы. Напишите что-нибудь для регистрации.")
+        await msg.answer("❌ Вы не зарегистрированы.")
         return
     
     text = (
@@ -808,7 +643,6 @@ async def profile_cmd(msg: Message):
     )
     await msg.answer(text)
 
-# === СТАТИСТИКА ===
 @router.message(Command("stats"))
 async def stats_cmd(msg: Message):
     if not is_admin(msg.from_user.id):
@@ -842,12 +676,11 @@ async def stats_cmd(msg: Message):
     )
     await msg.answer(text)
 
-# === ОЦЕНКА ===
 @router.message(Command("rate"))
 async def rate_cmd(msg: Message):
     args = msg.text.split()
     if len(args) < 2:
-        await msg.answer("Использование: /rate <оценка 1-5> [комментарий]")
+        await msg.answer("Использование: /rate <оценка 1-5>")
         return
     
     try:
@@ -872,29 +705,26 @@ async def rate_cmd(msg: Message):
     
     await msg.answer(f"✅ Спасибо за оценку {rating}/5!")
 
-# === ПЕРСОНАЛЬНЫЙ ПРОМПТ ===
 @router.message(Command("setprompt"))
 async def set_prompt_cmd(msg: Message):
     args = msg.text.split(maxsplit=1)
     if len(args) < 2:
-        await msg.answer("Использование: /setprompt <текст системного промпта>")
+        await msg.answer("Использование: /setprompt <текст>")
         return
     
-    prompt = args[1].strip()
-    set_custom_prompt(msg.from_user.id, prompt)
-    await msg.answer("✅ Персональный системный промпт установлен.")
+    set_custom_prompt(msg.from_user.id, args[1].strip())
+    await msg.answer("✅ Персональный промпт установлен.")
 
 @router.message(Command("resetprompt"))
 async def reset_prompt_cmd(msg: Message):
     set_custom_prompt(msg.from_user.id, None)
-    await msg.answer("✅ Системный промпт сброшен до стандартного.")
+    await msg.answer("✅ Промпт сброшен.")
 
-# === ПОИСК В ИСТОРИИ ===
 @router.message(Command("find"))
 async def find_cmd(msg: Message):
     args = msg.text.split(maxsplit=1)
     if len(args) < 2:
-        await msg.answer("Использование: /find <текст для поиска>")
+        await msg.answer("Использование: /find <текст>")
         return
     
     query = args[1].strip().lower()
@@ -905,12 +735,11 @@ async def find_cmd(msg: Message):
             found.append(f"{item['role']}: {item['content'][:100]}...")
     
     if not found:
-        await msg.answer("🔍 Ничего не найдено в истории.")
+        await msg.answer("🔍 Ничего не найдено.")
     else:
         result = "\n\n".join(found[:5])
         await msg.answer(f"🔍 Найдено {len(found)} совпадений:\n\n{result}")
 
-# === УПРАВЛЕНИЕ КАНАЛАМИ ===
 @router.message(Command("addchannel"))
 async def add_channel_cmd(msg: Message):
     args = msg.text.split()
@@ -940,13 +769,9 @@ async def add_channel_cmd(msg: Message):
             await msg.answer("❌ Неверный формат. Используйте @username или -100ID")
             return
         
-        # Проверяем права бота
         bot_member = await bot.get_chat_member(chat_id, bot.id)
         if not isinstance(bot_member, (ChatMemberAdministrator, ChatMemberOwner)):
-            await msg.answer(
-                "❌ Бот не администратор в этом канале.\n"
-                "Добавьте бота как администратора и попробуйте снова."
-            )
+            await msg.answer("❌ Бот не администратор в этом канале.")
             return
         
         await add_channel_to_db(chat_id, chat_title, chat_username, msg.from_user.id)
@@ -954,16 +779,13 @@ async def add_channel_cmd(msg: Message):
         await msg.answer(
             f"✅ <b>Канал добавлен!</b>\n\n"
             f"📌 Название: {chat_title}\n"
-            f"🆔 ID: <code>{chat_id}</code>\n"
-            f"📝 Юзернейм: {chat_username}\n\n"
+            f"🆔 ID: <code>{chat_id}</code>\n\n"
             f"Теперь вы можете публиковать посты:\n"
             f"/post <текст> — текст\n"
             f"/postphoto <подпись> — с фото\n"
             f"/channels — список каналов"
         )
         
-    except TelegramBadRequest as e:
-        await msg.answer(f"❌ Ошибка: {str(e)}")
     except Exception as e:
         await msg.answer(f"❌ Ошибка: {str(e)}")
 
@@ -972,15 +794,10 @@ async def list_channels_cmd(msg: Message):
     channels = await get_user_channels(msg.from_user.id)
     
     if not channels:
-        await msg.answer(
-            "📢 У вас нет добавленных каналов.\n"
-            "Добавьте: /addchannel @username"
-        )
+        await msg.answer("📢 У вас нет добавленных каналов.\nДобавьте: /addchannel @username")
         return
     
     text = "📋 <b>Ваши каналы:</b>\n\n"
-    keyboard = []
-    
     for idx, ch in enumerate(channels, 1):
         text += f"{idx}. <b>{ch['chat_title']}</b>\n"
         text += f"   🆔 <code>{ch['chat_id']}</code>\n"
@@ -995,11 +812,9 @@ async def remove_channel_cmd(msg: Message):
         await msg.answer("Использование: /removechannel <chat_id>")
         return
     
-    chat_id = args[1].strip()
-    await remove_channel_from_db(chat_id)
-    await msg.answer(f"✅ Канал {chat_id} удалён из управления.")
+    await remove_channel_from_db(args[1].strip())
+    await msg.answer("✅ Канал удалён.")
 
-# === ПУБЛИКАЦИЯ ПОСТОВ ===
 @router.message(Command("post"))
 async def post_text_cmd(msg: Message):
     args = msg.text.split(maxsplit=1)
@@ -1012,22 +827,6 @@ async def post_text_cmd(msg: Message):
     
     if not channels:
         await msg.answer("❌ Сначала добавьте канал: /addchannel @username")
-        return
-    
-    if len(channels) > 1:
-        keyboard = []
-        for ch in channels:
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"📤 {ch['chat_title']}",
-                    callback_data=f"post_text_{ch['chat_id']}_{text[:50]}"
-                )
-            ])
-        reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-        await msg.answer(
-            "📢 <b>Выберите канал:</b>",
-            reply_markup=reply_markup
-        )
         return
     
     channel_id = channels[0]['chat_id']
@@ -1052,20 +851,6 @@ async def post_photo_cmd(msg: Message):
         return
     
     file_id = msg.photo[-1].file_id
-    
-    if len(channels) > 1:
-        keyboard = []
-        for ch in channels:
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"📤 {ch['chat_title']}",
-                    callback_data=f"post_photo_{ch['chat_id']}_{file_id}_{caption[:30]}"
-                )
-            ])
-        reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-        await msg.answer("📢 <b>Выберите канал:</b>", reply_markup=reply_markup)
-        return
-    
     channel_id = channels[0]['chat_id']
     result = await publish_to_channel(channel_id, caption, media_file=file_id, media_type='photo')
     
@@ -1088,20 +873,6 @@ async def post_video_cmd(msg: Message):
         return
     
     file_id = msg.video.file_id
-    
-    if len(channels) > 1:
-        keyboard = []
-        for ch in channels:
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"📤 {ch['chat_title']}",
-                    callback_data=f"post_video_{ch['chat_id']}_{file_id}_{caption[:30]}"
-                )
-            ])
-        reply_markup = InlineKeyboardMarkup(inline_keyboard=keyboard)
-        await msg.answer("📢 <b>Выберите канал:</b>", reply_markup=reply_markup)
-        return
-    
     channel_id = channels[0]['chat_id']
     result = await publish_to_channel(channel_id, caption, media_file=file_id, media_type='video')
     
@@ -1114,7 +885,7 @@ async def post_video_cmd(msg: Message):
 async def history_cmd(msg: Message):
     channels = await get_user_channels(msg.from_user.id)
     if not channels:
-        await msg.answer("❌ Сначала добавьте канал: /addchannel @username")
+        await msg.answer("❌ Сначала добавьте канал.")
         return
     
     channel_id = channels[0]['chat_id']
@@ -1132,22 +903,15 @@ async def history_cmd(msg: Message):
     
     await msg.answer(text[:4096])
 
-# === ШАБЛОНЫ ===
 @router.message(Command("posttemplate"))
 async def save_template_cmd(msg: Message):
     args = msg.text.split(maxsplit=2)
     if len(args) < 3:
-        await msg.answer(
-            "📝 <b>Сохранить шаблон:</b>\n\n"
-            "/posttemplate <имя> <текст>\n\n"
-            "Пример: /posttemplate важное Всем привет!"
-        )
+        await msg.answer("📝 /posttemplate <имя> <текст>")
         return
     
-    name = args[1].strip()
-    content = args[2].strip()
-    await save_template(msg.from_user.id, name, content)
-    await msg.answer(f"✅ Шаблон <b>{name}</b> сохранён!")
+    await save_template(msg.from_user.id, args[1].strip(), args[2].strip())
+    await msg.answer(f"✅ Шаблон <b>{args[1]}</b> сохранён!")
 
 @router.message(Command("templates"))
 async def list_templates_cmd(msg: Message):
@@ -1168,26 +932,23 @@ async def list_templates_cmd(msg: Message):
 async def use_template_cmd(msg: Message):
     args = msg.text.split(maxsplit=1)
     if len(args) < 2:
-        await msg.answer("❌ Укажите имя шаблона: /usetemplate <имя>")
+        await msg.answer("❌ /usetemplate <имя>")
         return
     
-    template_name = args[1].strip()
-    content = await get_template_content(msg.from_user.id, template_name)
-    
+    content = await get_template_content(msg.from_user.id, args[1].strip())
     if not content:
-        await msg.answer(f"❌ Шаблон <b>{template_name}</b> не найден.")
+        await msg.answer(f"❌ Шаблон не найден.")
         return
     
     channels = await get_user_channels(msg.from_user.id)
     if not channels:
-        await msg.answer("❌ Сначала добавьте канал: /addchannel @username")
+        await msg.answer("❌ Сначала добавьте канал.")
         return
     
-    channel_id = channels[0]['chat_id']
-    result = await publish_to_channel(channel_id, content)
+    result = await publish_to_channel(channels[0]['chat_id'], content)
     
     if result['success']:
-        await msg.answer(f"✅ <b>Пост по шаблону опубликован!</b>")
+        await msg.answer("✅ <b>Пост по шаблону опубликован!</b>")
     else:
         await msg.answer(f"❌ Ошибка: {result['error']}")
 
@@ -1195,13 +956,12 @@ async def use_template_cmd(msg: Message):
 async def delete_template_cmd(msg: Message):
     args = msg.text.split(maxsplit=1)
     if len(args) < 2:
-        await msg.answer("❌ Укажите имя шаблона: /deletetemplate <имя>")
+        await msg.answer("❌ /deletetemplate <имя>")
         return
     
     await delete_template(msg.from_user.id, args[1].strip())
-    await msg.answer(f"✅ Шаблон удалён.")
+    await msg.answer("✅ Шаблон удалён.")
 
-# === АДМИН-КОМАНДЫ ===
 @router.message(Command("ban"))
 async def ban_cmd(msg: Message):
     if not is_admin(msg.from_user.id):
@@ -1214,9 +974,8 @@ async def ban_cmd(msg: Message):
         return
     
     try:
-        target_id = int(args[1])
-        set_user_banned(target_id, True)
-        await msg.answer(f"✅ Пользователь {target_id} забанен.")
+        set_user_banned(int(args[1]), True)
+        await msg.answer(f"✅ Пользователь {args[1]} забанен.")
     except ValueError:
         await msg.answer("ID должен быть числом.")
 
@@ -1232,9 +991,8 @@ async def unban_cmd(msg: Message):
         return
     
     try:
-        target_id = int(args[1])
-        set_user_banned(target_id, False)
-        await msg.answer(f"✅ Пользователь {target_id} разбанен.")
+        set_user_banned(int(args[1]), False)
+        await msg.answer(f"✅ Пользователь {args[1]} разбанен.")
     except ValueError:
         await msg.answer("ID должен быть числом.")
 
@@ -1249,7 +1007,6 @@ async def broadcast_cmd(msg: Message):
         await msg.answer("Введите текст для рассылки.")
         return
     
-    text = args[1].strip()
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     cursor.execute('SELECT user_id FROM users WHERE banned = 0')
@@ -1259,7 +1016,7 @@ async def broadcast_cmd(msg: Message):
     sent = 0
     for (user_id,) in users:
         try:
-            await bot.send_message(user_id, f"📢 <b>Объявление:</b>\n\n{text}")
+            await bot.send_message(user_id, f"📢 <b>Объявление:</b>\n\n{args[1].strip()}")
             sent += 1
             await asyncio.sleep(0.05)
         except Exception:
@@ -1267,109 +1024,11 @@ async def broadcast_cmd(msg: Message):
     
     await msg.answer(f"✅ Рассылка выполнена. Отправлено {sent} пользователям.")
 
-@router.message(Command("statsfull"))
-async def statsfull_cmd(msg: Message):
-    if not is_admin(msg.from_user.id):
-        await msg.answer("⛔ Доступ запрещён.")
-        return
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    
-    # Топ-10 пользователей по запросам
-    cursor.execute('''
-        SELECT user_id, username, total_requests, trust_score
-        FROM users
-        ORDER BY total_requests DESC
-        LIMIT 10
-    ''')
-    top_users = cursor.fetchall()
-    
-    # Статистика по каналам
-    cursor.execute('''
-        SELECT chat_title, COUNT(posts.id) as post_count
-        FROM channels
-        LEFT JOIN posts ON channels.chat_id = posts.channel_id
-        WHERE channels.is_active = TRUE
-        GROUP BY channels.chat_id
-        ORDER BY post_count DESC
-    ''')
-    top_channels = cursor.fetchall()
-    
-    conn.close()
-    
-    text = "📊 <b>Полная статистика</b>\n\n"
-    text += "<b>🏆 Топ пользователей:</b>\n"
-    for idx, (user_id, username, requests, trust) in enumerate(top_users, 1):
-        text += f"{idx}. @{username or user_id} — {requests} запросов, ⭐{trust}\n"
-    
-    text += "\n<b>📢 Топ каналов:</b>\n"
-    for idx, (title, count) in enumerate(top_channels, 1):
-        text += f"{idx}. {title[:30]} — {count} постов\n"
-    
-    await msg.answer(text[:4096])
+# ============================================================
+# 🎨 ОБРАБОТЧИКИ CALLBACK
+# ============================================================
 
-# === ОБРАБОТЧИКИ INLINE КНОПОК ===
-@router.callback_query(lambda c: c.data.startswith('post_text_'))
-async def handle_post_text_callback(callback: CallbackQuery):
-    parts = callback.data.split('_', 2)
-    if len(parts) < 3:
-        await callback.answer("Ошибка данных")
-        return
-    
-    channel_id = parts[1]
-    text = parts[2] if len(parts) > 2 else "Пост без текста"
-    
-    result = await publish_to_channel(channel_id, text)
-    
-    if result['success']:
-        await callback.message.answer(f"✅ <b>Пост опубликован!</b>\n\n{text[:200]}")
-    else:
-        await callback.message.answer(f"❌ Ошибка: {result['error']}")
-    
-    await callback.answer()
-
-@router.callback_query(lambda c: c.data.startswith('post_photo_'))
-async def handle_post_photo_callback(callback: CallbackQuery):
-    parts = callback.data.split('_', 3)
-    if len(parts) < 4:
-        await callback.answer("Ошибка данных")
-        return
-    
-    channel_id = parts[2]
-    file_id = parts[3]
-    caption = parts[4] if len(parts) > 4 else "📸"
-    
-    result = await publish_to_channel(channel_id, caption, media_file=file_id, media_type='photo')
-    
-    if result['success']:
-        await callback.message.answer("✅ <b>Пост с фото опубликован!</b>")
-    else:
-        await callback.message.answer(f"❌ Ошибка: {result['error']}")
-    
-    await callback.answer()
-
-@router.callback_query(lambda c: c.data.startswith('post_video_'))
-async def handle_post_video_callback(callback: CallbackQuery):
-    parts = callback.data.split('_', 3)
-    if len(parts) < 4:
-        await callback.answer("Ошибка данных")
-        return
-    
-    channel_id = parts[2]
-    file_id = parts[3]
-    caption = parts[4] if len(parts) > 4 else "🎬"
-    
-    result = await publish_to_channel(channel_id, caption, media_file=file_id, media_type='video')
-    
-    if result['success']:
-        await callback.message.answer("✅ <b>Пост с видео опубликован!</b>")
-    else:
-        await callback.message.answer(f"❌ Ошибка: {result['error']}")
-    
-    await callback.answer()
-
-@router.callback_query(lambda c: c.data == 'add_channel_help')
+@router.callback_query(lambda c: c.data == "add_channel_help")
 async def handle_add_channel_help(callback: CallbackQuery):
     await callback.message.answer(
         "📢 <b>Как добавить канал:</b>\n\n"
@@ -1379,38 +1038,30 @@ async def handle_add_channel_help(callback: CallbackQuery):
     )
     await callback.answer()
 
-@router.callback_query(lambda c: c.data == 'help_menu')
+@router.callback_query(lambda c: c.data == "help_menu")
 async def handle_help_menu(callback: CallbackQuery):
     await help_cmd(callback.message)
     await callback.answer()
 
-# === ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ (ГЛАВНЫЙ) ===
+# ============================================================
+# 💬 ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ
+# ============================================================
+
 @router.message(F.text)
 async def handle_text(msg: Message):
     user_text = msg.text.strip()
-    if not user_text:
+    if not user_text or user_text.startswith('/'):
         return
-    
-    # Игнорируем команды
-    if user_text.startswith('/'):
-        return
-    
-    # Проверяем, не ждем ли мы пост
-    # (для упрощения — просто отправляем в AI)
     
     await msg.bot.send_chat_action(msg.chat.id, "typing")
-    
     answer = await ask_groq(msg.from_user.id, user_text)
     
-    # Проверяем длину ответа (Telegram лимит 4096)
     if len(answer) > 4000:
-        parts = [answer[i:i+4000] for i in range(0, len(answer), 4000)]
-        for part in parts:
+        for part in [answer[i:i+4000] for i in range(0, len(answer), 4000)]:
             await msg.answer(part)
     else:
         await msg.answer(answer)
 
-# === ОБРАБОТЧИК МЕДИА ===
 @router.message(F.photo)
 async def handle_photo(msg: Message):
     user_text = msg.caption or "Отправил фото"
@@ -1429,45 +1080,41 @@ async def handle_video(msg: Message):
     answer = await ask_groq(msg.from_user.id, f"[ВИДЕО] {user_text}")
     await msg.answer(answer)
 
-@router.message(F.voice)
-async def handle_voice(msg: Message):
-    await msg.answer("🎤 Голосовые сообщения пока не поддерживаются. Напишите текстом.")
+# ============================================================
+# 🛠️ ОБРАБОТЧИК ОШИБОК (ИСПРАВЛЕН)
+# ============================================================
 
-# === ОБРАБОТЧИК ОШИБОК ===
 @router.errors()
-async def error_handler(event, error):
+async def error_handler(event: Update, error: Exception):
     logger.error(f"Ошибка: {error}")
     if isinstance(event, Message):
         try:
-            await event.answer("⚠️ Произошла ошибка. Пожалуйста, попробуйте позже.")
+            await event.answer("⚠️ Произошла ошибка. Попробуйте позже.")
         except:
             pass
 
 # ============================================================
-# 🚀 ЗАПУСК БОТА
+# 🚀 ЗАПУСК
 # ============================================================
 
 async def main():
-    """Главная функция запуска"""
     logger.info("🚀 ZOV BOT v3.0 запускается...")
     logger.info(f"👤 Администраторы: {ADMIN_IDS}")
     
-    # Проверяем наличие бота в каналах
     try:
         me = await bot.get_me()
         logger.info(f"🤖 Бот: @{me.username} (ID: {me.id})")
     except Exception as e:
-        logger.error(f"❌ Ошибка подключения к Telegram: {e}")
+        logger.error(f"❌ Ошибка подключения: {e}")
         return
     
-    # Подключаем роутер
     dp.include_router(router)
     
     try:
         logger.info("✅ Бот готов к работе!")
         await dp.start_polling(bot)
     except KeyboardInterrupt:
-        logger.info("⏹️ Бот остановлен пользователем")
+        logger.info("⏹️ Бот остановлен")
     except Exception as e:
         logger.error(f"❌ Критическая ошибка: {e}")
     finally:
