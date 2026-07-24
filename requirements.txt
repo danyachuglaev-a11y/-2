@@ -4,4 +4,3 @@ httpx==0.24.1
 httpcore==0.17.3
 aiohttp==3.9.1
 aiofiles==23.2.1
-python-dotenv==1.0.0
