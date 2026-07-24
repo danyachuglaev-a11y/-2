@@ -5,4 +5,3 @@ httpcore==0.17.3
 aiohttp==3.9.1
 aiofiles==23.2.1
 python-dotenv==1.0.0
-certifi==2024.2.2
