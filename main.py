@@ -16,7 +16,7 @@ from groq import Groq
 # ============================================================
 
 BOT_TOKEN = "8887137957:AAHsh1OjO30sRdzVe7ljhsWc5ud8DXIFbeE"  # например: "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz"
-GROQ_API_KEY = "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"  # например: "gsk_abc123def456ghi789jkl"
+GROQ_API_KEY = "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"  # например: "gsk_abc123def456ghi789jkl"
 MODEL = "llama-3.3-70b-versatile"
 MAX_HISTORY = 15
 
