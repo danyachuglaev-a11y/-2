@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""
-🤖 ZOV BOT v3.0 — ПОЛНОСТЬЮ РАБОЧАЯ ВЕРСИЯ
-"""
-
 import asyncio
 import logging
 import re
 import time
 import sqlite3
-import os
 from datetime import datetime
 from collections import defaultdict
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional
 from pathlib import Path
 
-from aiogram import Bot, Dispatcher, Router, F, types
+from aiogram import Bot, Dispatcher, Router, F
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
     ChatMemberAdministrator, ChatMemberOwner, Update
@@ -31,31 +26,27 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 from groq import Groq
 
 # ============================================================
-# ⚙️ КОНФИГУРАЦИЯ — ЗАМЕНИТЬ НА СВОИ ДАННЫЕ
+# КОНФИГУРАЦИЯ — ЗАМЕНИТЬ
 # ============================================================
 
 BOT_TOKEN = "8887137957:AAHsh1OjO30sRdzVe7ljhsWc5ud8DXIFbeE"
 GROQ_API_KEY = "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"
 MODEL = "llama-3.3-70b-versatile"
 MAX_HISTORY = 15
-ADMIN_IDS = [8887137957]  # ЗАМЕНИТЬ НА СВОЙ ID
+ADMIN_IDS = [1022249544]
 
 # ============================================================
-# 📁 НАСТРОЙКИ
+# НАСТРОЙКИ
 # ============================================================
 
 BASE_DIR = Path(__file__).parent
-DB_PATH = BASE_DIR / "zov_bot_data.db"
+DB_PATH = BASE_DIR / "bot_data.db"
 LOGS_DIR = BASE_DIR / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
 
-# ============================================================
-# 📊 ЛОГИРОВАНИЕ
-# ============================================================
-
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(LOGS_DIR / 'bot.log', encoding='utf-8'),
         logging.StreamHandler()
@@ -64,14 +55,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ============================================================
-# 🧠 FSM СОСТОЯНИЯ
+# FSM СОСТОЯНИЯ
 # ============================================================
 
 class Form(StatesGroup):
     waiting_for_post_text = State()
 
 # ============================================================
-# 🤖 ИНИЦИАЛИЗАЦИЯ
+# ИНИЦИАЛИЗАЦИЯ
 # ============================================================
 
 bot = Bot(
@@ -82,11 +73,10 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 router = Router()
 
-# ФИКС: правильная инициализация Groq
+# Groq с фиксом
 try:
     groq_client = Groq(api_key=GROQ_API_KEY)
 except TypeError:
-    # Обходной путь для старых версий
     class PatchedGroq(Groq):
         def __init__(self, **kwargs):
             kwargs.pop('proxies', None)
@@ -95,7 +85,7 @@ except TypeError:
     groq_client = PatchedGroq(api_key=GROQ_API_KEY)
 
 # ============================================================
-# 💾 БАЗА ДАННЫХ
+# БАЗА ДАННЫХ
 # ============================================================
 
 def init_db():
@@ -187,7 +177,7 @@ def init_db():
 init_db()
 
 # ============================================================
-# 📋 ФУНКЦИИ БАЗЫ ДАННЫХ
+# ФУНКЦИИ БАЗЫ ДАННЫХ
 # ============================================================
 
 def get_user_data(user_id: int) -> Optional[Dict]:
@@ -416,7 +406,7 @@ async def delete_template(user_id: int, name: str):
     conn.close()
 
 # ============================================================
-# 🛡️ АНТИ-ФЛУД
+# АНТИ-ФЛУД
 # ============================================================
 
 class RateLimiter:
@@ -436,19 +426,16 @@ class RateLimiter:
 rate_limiter = RateLimiter(max_requests=8, time_window=60)
 
 # ============================================================
-# 🧠 СИСТЕМНЫЙ ПРОМПТ
+# СИСТЕМНЫЙ ПРОМПТ
 # ============================================================
 
 SYSTEM_PROMPT_BASE = (
-    "Ты — AI screamsoon. Твой создатель — @screamsoon. "
+    "Ты — AI помощник. Твой создатель — @screamsoon. "
     "Отвечай вежливо, понятно, по делу. "
     "Не используй эмодзи и смайлики в ответах слишком много. "
     "Никогда не упоминай нейросети, Groq, OpenAI, API или технологии. "
     "Ты — просто помощник. Всегда в конце ответа добавляй: Мой создатель @screamsoon. "
-    "Если человеку нужно чтобы тебя добавили в чат, то просто скажи ему как это сделать и общайся в чате. "
-    "Если человек просит с ним общаться и писать первым значит ты это выполняешь. "
-    "Отвечай клиенту всегда правильно и четко на его поставленный вопрос без ошибок. "
-    "Если пользователь спрашивает что-то запретное или опасное — вежливо откажи, но предложи альтернативу."
+    "Отвечай клиенту всегда правильно и четко на его поставленный вопрос без ошибок."
 )
 
 def get_system_prompt(user_id: int) -> str:
@@ -459,13 +446,13 @@ def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
 
 # ============================================================
-# 🔥 ЗАПРОС К GROQ
+# ЗАПРОС К GROQ
 # ============================================================
 
 async def ask_groq(user_id: int, user_message: str) -> str:
     user_data = get_user_data(user_id)
     if user_data and user_data.get('banned', False):
-        return "⛔ Вы забанены. Обратитесь к администратору."
+        return "⛔ Вы забанены."
 
     if not is_admin(user_id) and not rate_limiter.is_allowed(user_id):
         return "⚠️ Слишком много запросов. Подождите минуту."
@@ -506,12 +493,12 @@ async def ask_groq(user_id: int, user_message: str) -> str:
         return answer
 
     except Exception as e:
-        logger.error(f"Ошибка Groq API для user {user_id}: {e}")
+        logger.error(f"Ошибка Groq API: {e}")
         update_trust_score(user_id, -10)
         return "⚠️ Техническая ошибка. Повторите через несколько секунд."
 
 # ============================================================
-# 📤 ПУБЛИКАЦИЯ В КАНАЛ
+# ПУБЛИКАЦИЯ В КАНАЛ
 # ============================================================
 
 async def publish_to_channel(
@@ -556,8 +543,17 @@ async def publish_to_channel(
     return result
 
 # ============================================================
-# 🎯 ХЕНДЛЕРЫ КОМАНД
+# ХЕНДЛЕРЫ КОМАНД
 # ============================================================
+
+def escape_html(text: str) -> str:
+    """Экранирует HTML-символы для безопасной отправки"""
+    if not text:
+        return text
+    return (text.replace('&', '&amp;')
+                .replace('<', '&lt;')
+                .replace('>', '&gt;')
+                .replace('"', '&quot;'))
 
 @router.message(Command("start"))
 async def start_cmd(msg: Message):
@@ -575,14 +571,13 @@ async def start_cmd(msg: Message):
     ])
     
     await msg.answer(
-        "🤖 <b>ZOV BOT v3.0</b>\n\n"
-        "Я — AI screamsoon. Создатель: @screamsoon.\n\n"
+        "🤖 <b>AI Помощник</b>\n\n"
+        "Я — AI помощник. Создатель: @screamsoon.\n\n"
         "📌 <b>Основные возможности:</b>\n"
         "• Общение и ответы на вопросы\n"
         "• Публикация постов в каналы\n"
-        "• Управление несколькими каналами\n"
-        "• Шаблоны постов\n"
-        "• История и статистика\n\n"
+        "• Управление каналами\n"
+        "• Шаблоны постов\n\n"
         "Отправьте /help для полного списка команд.",
         reply_markup=keyboard
     )
@@ -590,31 +585,26 @@ async def start_cmd(msg: Message):
 @router.message(Command("help"))
 async def help_cmd(msg: Message):
     text = (
-        "🤖 <b>ZOV BOT — Полная справка</b>\n\n"
+        "🤖 <b>Помощь</b>\n\n"
         "📌 <b>Основные команды:</b>\n"
         "/start — Начать работу\n"
         "/help — Эта справка\n"
-        "/clear — Очистить историю чата\n"
-        "/profile — Ваш профиль\n"
-        "/stats — Статистика бота\n"
-        "/rate <1-5> — Оценить ответ\n\n"
+        "/clear — Очистить историю\n"
+        "/profile — Ваш профиль\n\n"
         "📢 <b>Управление каналами:</b>\n"
         "/addchannel @username — Добавить канал\n"
         "/channels — Список каналов\n"
-        "/post <текст> — Опубликовать пост\n"
-        "/postphoto <подпись> — Опубликовать с фото\n"
-        "/postvideo <подпись> — Опубликовать с видео\n"
-        "/history — История постов\n"
-        "/removechannel <ID> — Удалить канал\n\n"
-        "📝 <b>Шаблоны постов:</b>\n"
-        "/posttemplate <имя> <текст> — Сохранить шаблон\n"
+        "/post текст — Опубликовать пост\n"
+        "/postphoto подпись — Опубликовать с фото\n"
+        "/postvideo подпись — Опубликовать с видео\n"
+        "/history — История постов\n\n"
+        "📝 <b>Шаблоны:</b>\n"
+        "/posttemplate имя текст — Сохранить шаблон\n"
         "/templates — Список шаблонов\n"
-        "/usetemplate <имя> — Использовать шаблон\n"
-        "/deletetemplate <имя> — Удалить шаблон\n\n"
+        "/usetemplate имя — Использовать шаблон\n\n"
         "⚙️ <b>Настройки:</b>\n"
-        "/setprompt <текст> — Персональный промпт\n"
-        "/resetprompt — Сбросить промпт\n"
-        "/find <текст> — Поиск в истории\n\n"
+        "/setprompt текст — Персональный промпт\n"
+        "/resetprompt — Сбросить промпт\n\n"
         "👨‍💻 Создатель: @screamsoon"
     )
     await msg.answer(text)
@@ -634,111 +624,14 @@ async def profile_cmd(msg: Message):
     text = (
         f"📊 <b>Ваш профиль</b>\n"
         f"🆔 ID: <code>{user_data['user_id']}</code>\n"
-        f"👤 Имя: {user_data['first_name'] or 'Не указано'}\n"
-        f"📝 Юзернейм: @{user_data['username'] or 'Нет'}\n"
+        f"👤 Имя: {escape_html(user_data['first_name'] or 'Не указано')}\n"
+        f"📝 Юзернейм: @{escape_html(user_data['username'] or 'Нет')}\n"
         f"📅 Присоединился: {user_data['joined_date'][:10]}\n"
         f"🔢 Запросов: {user_data['total_requests']}\n"
-        f"⭐ Рейтинг доверия: {user_data['trust_score']}/100\n"
+        f"⭐ Рейтинг: {user_data['trust_score']}/100\n"
         f"🚫 Статус: {'🔴 Забанен' if user_data['banned'] else '🟢 Активен'}"
     )
     await msg.answer(text)
-
-@router.message(Command("stats"))
-async def stats_cmd(msg: Message):
-    if not is_admin(msg.from_user.id):
-        await msg.answer("⛔ Доступ запрещён. Только для администраторов.")
-        return
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM users')
-    total_users = cursor.fetchone()[0]
-    cursor.execute('SELECT SUM(total_requests) FROM users')
-    total_requests = cursor.fetchone()[0] or 0
-    cursor.execute('SELECT COUNT(*) FROM users WHERE banned = 1')
-    banned_users = cursor.fetchone()[0]
-    cursor.execute('SELECT AVG(trust_score) FROM users')
-    avg_trust = cursor.fetchone()[0] or 0
-    cursor.execute('SELECT COUNT(*) FROM channels WHERE is_active = TRUE')
-    total_channels = cursor.fetchone()[0]
-    cursor.execute('SELECT COUNT(*) FROM posts')
-    total_posts = cursor.fetchone()[0]
-    conn.close()
-    
-    text = (
-        f"📈 <b>Статистика ZOV BOT</b>\n\n"
-        f"👥 Всего пользователей: {total_users}\n"
-        f"📩 Всего запросов: {total_requests}\n"
-        f"🚫 Забанено: {banned_users}\n"
-        f"⭐ Средний рейтинг: {avg_trust:.1f}/100\n"
-        f"📢 Активных каналов: {total_channels}\n"
-        f"📝 Всего постов: {total_posts}"
-    )
-    await msg.answer(text)
-
-@router.message(Command("rate"))
-async def rate_cmd(msg: Message):
-    args = msg.text.split()
-    if len(args) < 2:
-        await msg.answer("Использование: /rate <оценка 1-5>")
-        return
-    
-    try:
-        rating = int(args[1])
-        if rating < 1 or rating > 5:
-            await msg.answer("Оценка должна быть от 1 до 5.")
-            return
-    except ValueError:
-        await msg.answer("Оценка должна быть числом.")
-        return
-    
-    comment = " ".join(args[2:]) if len(args) > 2 else ""
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO feedback (user_id, rating, comment, date)
-        VALUES (?, ?, ?, ?)
-    ''', (msg.from_user.id, rating, comment, datetime.now().isoformat()))
-    conn.commit()
-    conn.close()
-    
-    await msg.answer(f"✅ Спасибо за оценку {rating}/5!")
-
-@router.message(Command("setprompt"))
-async def set_prompt_cmd(msg: Message):
-    args = msg.text.split(maxsplit=1)
-    if len(args) < 2:
-        await msg.answer("Использование: /setprompt <текст>")
-        return
-    
-    set_custom_prompt(msg.from_user.id, args[1].strip())
-    await msg.answer("✅ Персональный промпт установлен.")
-
-@router.message(Command("resetprompt"))
-async def reset_prompt_cmd(msg: Message):
-    set_custom_prompt(msg.from_user.id, None)
-    await msg.answer("✅ Промпт сброшен.")
-
-@router.message(Command("find"))
-async def find_cmd(msg: Message):
-    args = msg.text.split(maxsplit=1)
-    if len(args) < 2:
-        await msg.answer("Использование: /find <текст>")
-        return
-    
-    query = args[1].strip().lower()
-    history = get_chat_history(msg.from_user.id, 50)
-    found = []
-    for item in history:
-        if query in item['content'].lower():
-            found.append(f"{item['role']}: {item['content'][:100]}...")
-    
-    if not found:
-        await msg.answer("🔍 Ничего не найдено.")
-    else:
-        result = "\n\n".join(found[:5])
-        await msg.answer(f"🔍 Найдено {len(found)} совпадений:\n\n{result}")
 
 @router.message(Command("addchannel"))
 async def add_channel_cmd(msg: Message):
@@ -778,16 +671,15 @@ async def add_channel_cmd(msg: Message):
         
         await msg.answer(
             f"✅ <b>Канал добавлен!</b>\n\n"
-            f"📌 Название: {chat_title}\n"
+            f"📌 Название: {escape_html(chat_title)}\n"
             f"🆔 ID: <code>{chat_id}</code>\n\n"
             f"Теперь вы можете публиковать посты:\n"
-            f"/post <текст> — текст\n"
-            f"/postphoto <подпись> — с фото\n"
-            f"/channels — список каналов"
+            f"/post текст — текст\n"
+            f"/postphoto подпись — с фото"
         )
         
     except Exception as e:
-        await msg.answer(f"❌ Ошибка: {str(e)}")
+        await msg.answer(f"❌ Ошибка: {escape_html(str(e))}")
 
 @router.message(Command("channels"))
 async def list_channels_cmd(msg: Message):
@@ -799,27 +691,17 @@ async def list_channels_cmd(msg: Message):
     
     text = "📋 <b>Ваши каналы:</b>\n\n"
     for idx, ch in enumerate(channels, 1):
-        text += f"{idx}. <b>{ch['chat_title']}</b>\n"
+        text += f"{idx}. <b>{escape_html(ch['chat_title'])}</b>\n"
         text += f"   🆔 <code>{ch['chat_id']}</code>\n"
         text += f"   📅 Добавлен: {ch['added_date'][:10]}\n\n"
     
     await msg.answer(text)
 
-@router.message(Command("removechannel"))
-async def remove_channel_cmd(msg: Message):
-    args = msg.text.split()
-    if len(args) < 2:
-        await msg.answer("Использование: /removechannel <chat_id>")
-        return
-    
-    await remove_channel_from_db(args[1].strip())
-    await msg.answer("✅ Канал удалён.")
-
 @router.message(Command("post"))
 async def post_text_cmd(msg: Message):
     args = msg.text.split(maxsplit=1)
     if len(args) < 2:
-        await msg.answer("❌ Укажите текст: /post <текст>")
+        await msg.answer("❌ Укажите текст: /post текст")
         return
     
     text = args[1].strip()
@@ -833,9 +715,9 @@ async def post_text_cmd(msg: Message):
     result = await publish_to_channel(channel_id, text)
     
     if result['success']:
-        await msg.answer(f"✅ <b>Пост опубликован!</b>\n\n{text[:200]}")
+        await msg.answer(f"✅ <b>Пост опубликован!</b>")
     else:
-        await msg.answer(f"❌ Ошибка: {result['error']}")
+        await msg.answer(f"❌ Ошибка: {escape_html(result['error'])}")
 
 @router.message(Command("postphoto"))
 async def post_photo_cmd(msg: Message):
@@ -857,7 +739,7 @@ async def post_photo_cmd(msg: Message):
     if result['success']:
         await msg.answer("✅ <b>Пост с фото опубликован!</b>")
     else:
-        await msg.answer(f"❌ Ошибка: {result['error']}")
+        await msg.answer(f"❌ Ошибка: {escape_html(result['error'])}")
 
 @router.message(Command("postvideo"))
 async def post_video_cmd(msg: Message):
@@ -879,7 +761,7 @@ async def post_video_cmd(msg: Message):
     if result['success']:
         await msg.answer("✅ <b>Пост с видео опубликован!</b>")
     else:
-        await msg.answer(f"❌ Ошибка: {result['error']}")
+        await msg.answer(f"❌ Ошибка: {escape_html(result['error'])}")
 
 @router.message(Command("history"))
 async def history_cmd(msg: Message):
@@ -897,7 +779,7 @@ async def history_cmd(msg: Message):
     
     text = f"📊 <b>Последние 10 постов</b>\n\n"
     for idx, post in enumerate(posts, 1):
-        text += f"{idx}. 📝 {post['content']}\n"
+        text += f"{idx}. 📝 {escape_html(post['content'])}\n"
         text += f"   🆔 ID: {post['message_id']}\n"
         text += f"   📅 {post['posted_date'][:10]}\n\n"
     
@@ -907,11 +789,11 @@ async def history_cmd(msg: Message):
 async def save_template_cmd(msg: Message):
     args = msg.text.split(maxsplit=2)
     if len(args) < 3:
-        await msg.answer("📝 /posttemplate <имя> <текст>")
+        await msg.answer("📝 /posttemplate имя текст")
         return
     
     await save_template(msg.from_user.id, args[1].strip(), args[2].strip())
-    await msg.answer(f"✅ Шаблон <b>{args[1]}</b> сохранён!")
+    await msg.answer(f"✅ Шаблон <b>{escape_html(args[1])}</b> сохранён!")
 
 @router.message(Command("templates"))
 async def list_templates_cmd(msg: Message):
@@ -922,8 +804,8 @@ async def list_templates_cmd(msg: Message):
     
     text = "📝 <b>Ваши шаблоны:</b>\n\n"
     for idx, tmpl in enumerate(templates, 1):
-        text += f"{idx}. <b>{tmpl['name']}</b>\n"
-        text += f"   {tmpl['content'][:100]}...\n"
+        text += f"{idx}. <b>{escape_html(tmpl['name'])}</b>\n"
+        text += f"   {escape_html(tmpl['content'][:100])}...\n"
         text += f"   📅 {tmpl['created_date'][:10]}\n\n"
     
     await msg.answer(text)
@@ -932,7 +814,7 @@ async def list_templates_cmd(msg: Message):
 async def use_template_cmd(msg: Message):
     args = msg.text.split(maxsplit=1)
     if len(args) < 2:
-        await msg.answer("❌ /usetemplate <имя>")
+        await msg.answer("❌ /usetemplate имя")
         return
     
     content = await get_template_content(msg.from_user.id, args[1].strip())
@@ -950,17 +832,22 @@ async def use_template_cmd(msg: Message):
     if result['success']:
         await msg.answer("✅ <b>Пост по шаблону опубликован!</b>")
     else:
-        await msg.answer(f"❌ Ошибка: {result['error']}")
+        await msg.answer(f"❌ Ошибка: {escape_html(result['error'])}")
 
-@router.message(Command("deletetemplate"))
-async def delete_template_cmd(msg: Message):
+@router.message(Command("setprompt"))
+async def set_prompt_cmd(msg: Message):
     args = msg.text.split(maxsplit=1)
     if len(args) < 2:
-        await msg.answer("❌ /deletetemplate <имя>")
+        await msg.answer("Использование: /setprompt текст")
         return
     
-    await delete_template(msg.from_user.id, args[1].strip())
-    await msg.answer("✅ Шаблон удалён.")
+    set_custom_prompt(msg.from_user.id, args[1].strip())
+    await msg.answer("✅ Персональный промпт установлен.")
+
+@router.message(Command("resetprompt"))
+async def reset_prompt_cmd(msg: Message):
+    set_custom_prompt(msg.from_user.id, None)
+    await msg.answer("✅ Промпт сброшен.")
 
 @router.message(Command("ban"))
 async def ban_cmd(msg: Message):
@@ -970,7 +857,7 @@ async def ban_cmd(msg: Message):
     
     args = msg.text.split()
     if len(args) < 2:
-        await msg.answer("Использование: /ban <user_id>")
+        await msg.answer("Использование: /ban user_id")
         return
     
     try:
@@ -987,7 +874,7 @@ async def unban_cmd(msg: Message):
     
     args = msg.text.split()
     if len(args) < 2:
-        await msg.answer("Использование: /unban <user_id>")
+        await msg.answer("Использование: /unban user_id")
         return
     
     try:
@@ -996,36 +883,8 @@ async def unban_cmd(msg: Message):
     except ValueError:
         await msg.answer("ID должен быть числом.")
 
-@router.message(Command("broadcast"))
-async def broadcast_cmd(msg: Message):
-    if not is_admin(msg.from_user.id):
-        await msg.answer("⛔ Доступ запрещён.")
-        return
-    
-    args = msg.text.split(maxsplit=1)
-    if len(args) < 2:
-        await msg.answer("Введите текст для рассылки.")
-        return
-    
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('SELECT user_id FROM users WHERE banned = 0')
-    users = cursor.fetchall()
-    conn.close()
-    
-    sent = 0
-    for (user_id,) in users:
-        try:
-            await bot.send_message(user_id, f"📢 <b>Объявление:</b>\n\n{args[1].strip()}")
-            sent += 1
-            await asyncio.sleep(0.05)
-        except Exception:
-            pass
-    
-    await msg.answer(f"✅ Рассылка выполнена. Отправлено {sent} пользователям.")
-
 # ============================================================
-# 🎨 ОБРАБОТЧИКИ CALLBACK
+# CALLBACK ОБРАБОТЧИКИ
 # ============================================================
 
 @router.callback_query(lambda c: c.data == "add_channel_help")
@@ -1044,7 +903,7 @@ async def handle_help_menu(callback: CallbackQuery):
     await callback.answer()
 
 # ============================================================
-# 💬 ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ
+# ОБРАБОТЧИК СООБЩЕНИЙ
 # ============================================================
 
 @router.message(F.text)
@@ -1081,29 +940,28 @@ async def handle_video(msg: Message):
     await msg.answer(answer)
 
 # ============================================================
-# 🛠️ ОБРАБОТЧИК ОШИБОК (ИСПРАВЛЕН)
+# ОБРАБОТЧИК ОШИБОК
 # ============================================================
 
 @router.errors()
 async def error_handler(event: Update, error: Exception):
     logger.error(f"Ошибка: {error}")
-    if isinstance(event, Message):
+    if hasattr(event, 'message') and event.message:
         try:
-            await event.answer("⚠️ Произошла ошибка. Попробуйте позже.")
+            await event.message.answer("⚠️ Произошла ошибка. Попробуйте позже.")
         except:
             pass
 
 # ============================================================
-# 🚀 ЗАПУСК
+# ЗАПУСК
 # ============================================================
 
 async def main():
-    logger.info("🚀 ZOV BOT v3.0 запускается...")
-    logger.info(f"👤 Администраторы: {ADMIN_IDS}")
+    logger.info("🚀 Бот запускается...")
     
     try:
         me = await bot.get_me()
-        logger.info(f"🤖 Бот: @{me.username} (ID: {me.id})")
+        logger.info(f"🤖 Бот: @{me.username}")
     except Exception as e:
         logger.error(f"❌ Ошибка подключения: {e}")
         return
@@ -1111,15 +969,12 @@ async def main():
     dp.include_router(router)
     
     try:
-        logger.info("✅ Бот готов к работе!")
+        logger.info("✅ Бот готов!")
         await dp.start_polling(bot)
     except KeyboardInterrupt:
-        logger.info("⏹️ Бот остановлен")
-    except Exception as e:
-        logger.error(f"❌ Критическая ошибка: {e}")
+        logger.info("⏹️ Остановлен")
     finally:
         await bot.session.close()
-        logger.info("👋 Соединение закрыто")
 
 if __name__ == "__main__":
     asyncio.run(main())
